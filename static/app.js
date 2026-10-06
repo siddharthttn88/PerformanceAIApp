@@ -194,11 +194,13 @@ function getChartOptions(pointCount = 0) {
             display: false,
         },
         tooltip: {
+            enabled: false,
+            external: renderChartTooltip,
             callbacks: {
                 title(items) {
                     if (!items || !items.length) return "";
-                    const raw = items[0].label;
-                    return `${raw} (IST)`;
+                    const raw = String(items[0].label || "").replace(/\s*\(IST\)\s*$/i, "");
+                    return raw ? `${raw} · IST` : "";
                 },
             },
         },
@@ -271,6 +273,98 @@ function renderChartLegendPills(chart, containerEl) {
         });
         containerEl.appendChild(button);
     });
+}
+
+function formatChartNumber(value) {
+    const num = Number(value);
+    if (!Number.isFinite(num)) {
+        return "—";
+    }
+    const abs = Math.abs(num);
+    if (Number.isInteger(num) || abs >= 1000) {
+        return num.toLocaleString("en-US", { maximumFractionDigits: 0 });
+    }
+    if (abs >= 100) {
+        return num.toLocaleString("en-US", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+    }
+    return num.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 3 });
+}
+
+function splitDatasetLabel(label) {
+    const text = String(label || "").trim();
+    const match = text.match(/^(.*?)\s*\(([^)]+)\)\s*$/);
+    if (match) {
+        return { name: match[1].trim(), unit: match[2].trim() };
+    }
+    return { name: text || "Series", unit: "" };
+}
+
+function ensureChartTooltipEl(chart) {
+    const parent = chart.canvas.parentNode;
+    if (!parent) {
+        return null;
+    }
+    let el = parent.querySelector(".chart-hover-tooltip");
+    if (!el) {
+        el = document.createElement("div");
+        el.className = "chart-hover-tooltip";
+        el.setAttribute("role", "tooltip");
+        parent.appendChild(el);
+    }
+    return el;
+}
+
+function renderChartTooltip(context) {
+    const { chart, tooltip } = context;
+    const el = ensureChartTooltipEl(chart);
+    if (!el) {
+        return;
+    }
+    if (!tooltip || tooltip.opacity === 0 || !tooltip.dataPoints?.length) {
+        el.classList.remove("is-visible");
+        return;
+    }
+
+    const title = tooltip.title?.filter(Boolean).join(" ") || "";
+    const rowsHtml = tooltip.dataPoints.map((point) => {
+        const { name, unit } = splitDatasetLabel(point.dataset.label);
+        const color = point.dataset.borderColor || "#64748b";
+        const value = formatChartNumber(point.parsed?.y);
+        const unitHtml = unit
+            ? `<span class="chart-hover-tooltip-unit">${escapeHtml(unit)}</span>`
+            : "";
+        return `<div class="chart-hover-tooltip-row">
+            <i class="chart-hover-tooltip-swatch" style="background:${escapeHtml(String(color))}"></i>
+            <span class="chart-hover-tooltip-name">${escapeHtml(name)}</span>
+            <span class="chart-hover-tooltip-value">${escapeHtml(value)}${unitHtml}</span>
+        </div>`;
+    }).join("");
+
+    el.innerHTML = `${title ? `<div class="chart-hover-tooltip-time">${escapeHtml(title)}</div>` : ""}
+        <div class="chart-hover-tooltip-rows">${rowsHtml}</div>`;
+    el.classList.add("is-visible");
+
+    const parent = chart.canvas.parentNode;
+    const tw = el.offsetWidth;
+    const th = el.offsetHeight;
+    const parentW = parent.clientWidth;
+    const parentH = parent.clientHeight;
+    let left = tooltip.caretX + 16;
+    let top = tooltip.caretY - th - 12;
+    if (left + tw > parentW - 8) {
+        left = tooltip.caretX - tw - 16;
+    }
+    if (left < 8) {
+        left = 8;
+    }
+    if (top < 8) {
+        top = tooltip.caretY + 16;
+    }
+    if (top + th > parentH - 8) {
+        top = Math.max(8, parentH - th - 8);
+    }
+    el.style.left = `${left}px`;
+    el.style.top = `${top}px`;
 }
 
 function latencyChartOptions(pointCount) {
@@ -2234,7 +2328,9 @@ function overlayChartOptions(unit, pointCount = 0) {
     options.plugins = {
         ...options.plugins,
         tooltip: {
+            ...options.plugins.tooltip,
             callbacks: {
+                ...(options.plugins.tooltip?.callbacks || {}),
                 title(items) {
                     if (!items || !items.length) return "";
                     return `${Number(items[0].parsed.x).toFixed(1)} min from start`;

@@ -656,6 +656,7 @@ button:disabled {
 .chart-canvas-wrap {
     position: relative;
     height: 300px;
+    overflow: visible;
 }
 
 .chart-canvas-wrap-sm {
@@ -1044,6 +1045,83 @@ body.modal-open {
 
 .chart-legend-label {
     white-space: nowrap;
+}
+
+.chart-hover-tooltip {
+    position: absolute;
+    z-index: 8;
+    min-width: 176px;
+    max-width: 260px;
+    padding: 10px 12px 8px;
+    border: 1px solid #e6edf5;
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.97);
+    box-shadow: 0 12px 28px rgba(15, 23, 42, 0.14);
+    backdrop-filter: blur(10px);
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(4px);
+    transition: opacity 120ms ease, transform 120ms ease;
+}
+
+.chart-hover-tooltip.is-visible {
+    opacity: 1;
+    transform: translateY(0);
+}
+
+.chart-hover-tooltip-time {
+    margin-bottom: 8px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid #eef2f7;
+    color: #64748b;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+}
+
+.chart-hover-tooltip-rows {
+    display: grid;
+    gap: 2px;
+}
+
+.chart-hover-tooltip-row {
+    display: grid;
+    grid-template-columns: 12px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 8px;
+    min-height: 24px;
+}
+
+.chart-hover-tooltip-swatch {
+    display: block;
+    width: 12px;
+    height: 3px;
+    border-radius: 999px;
+}
+
+.chart-hover-tooltip-name {
+    min-width: 0;
+    color: #334155;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.chart-hover-tooltip-value {
+    display: inline-flex;
+    align-items: baseline;
+    justify-content: flex-end;
+    gap: 5px;
+    color: #0f172a;
+    font-size: 12px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+.chart-hover-tooltip-unit {
+    color: #94a3b8;
+    font-size: 10px;
+    font-weight: 600;
 }
 
 .endpoint-chip {
