@@ -1,0 +1,494 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Performance AI</title>
+    <link rel="icon" type="image/png" href="/static/favicon.png">
+    <link rel="apple-touch-icon" href="/static/favicon.png">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/style.css?v=29">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+    <div class="app-shell">
+        <header class="topbar">
+            <div class="topbar-main">
+                <div class="brand-row">
+                    <h1>Performance AI</h1>
+                    <div class="project-menu" id="projectMenu">
+                        <button id="projectMenuBtn" type="button" aria-haspopup="listbox" aria-expanded="false">
+                            <span>Project</span>
+                            <strong id="projectMenuLabel">Select project</strong>
+                        </button>
+                        <div id="projectMenuPanel" class="project-menu-panel" hidden>
+                            <div id="projectMenuList" class="project-menu-list" role="listbox"></div>
+                            <div class="project-menu-create">
+                                <input id="newProjectName" type="text" maxlength="80" placeholder="New project name">
+                                <button id="createProjectBtn" type="button">Create</button>
+                            </div>
+                            <button id="deleteProjectBtn" type="button">Delete project</button>
+                        </div>
+                        <select id="projectSelect" hidden></select>
+                    </div>
+                </div>
+                <nav class="page-tabs" role="tablist" aria-label="Dashboard views">
+                    <button type="button" class="page-tab is-active" id="monitorTabBtn" data-view="monitor" role="tab" aria-selected="true">Monitor</button>
+                    <button type="button" class="page-tab" id="compareTabBtn" data-view="compare" role="tab" aria-selected="false">Compare</button>
+                </nav>
+            </div>
+            <p class="topbar-tagline">Project-based performance tests with Grafana, New Relic, and AI</p>
+        </header>
+
+        <div id="monitorView" class="view-panel">
+                    <section class="controls card" id="controlsBar">
+                        <div class="control-group">
+                            <label for="testName">Test Name</label>
+                            <input id="testName" type="text" maxlength="100" placeholder="e.g. Recommendation API baseline">
+                        </div>
+                        <div class="control-group service-picker" id="servicePicker">
+                            <label for="serviceMenuBtn">Services</label>
+                            <button id="serviceMenuBtn" type="button" aria-haspopup="listbox" aria-expanded="false">Select services</button>
+                            <div id="serviceMenuPanel" class="service-menu-panel" hidden>
+                                <input id="serviceSearch" type="search" placeholder="Search services" autocomplete="off">
+                                <div id="serviceMenuList" class="service-menu-list" role="listbox" aria-multiselectable="true"></div>
+                                <p id="serviceMenuHint" class="service-menu-hint">Select every service included in this test.</p>
+                            </div>
+                            <select id="serviceSelect" class="sr-only" aria-hidden="true"></select>
+                        </div>
+                        <div class="control-group">
+                            <label for="rangePreset">Time Range</label>
+                            <select id="rangePreset">
+                                <option value="now-5m">Last 5 minutes</option>
+                                <option value="now-15m">Last 15 minutes</option>
+                                <option value="now-30m">Last 30 minutes</option>
+                                <option value="now-1h">Last 1 hour</option>
+                                <option value="now-3h">Last 3 hours</option>
+                                <option value="now-6h">Last 6 hours</option>
+                                <option value="now-12h">Last 12 hours</option>
+                                <option value="now-24h">Last 24 hours</option>
+                                <option value="now-2d">Last 2 days</option>
+                                <option value="now-7d">Last 7 days</option>
+                                <option value="now-30d">Last 30 days</option>
+                                <option value="custom">Custom</option>
+                            </select>
+                        </div>
+                        <div id="customTimeWrap" class="custom-time-wrap controls-custom-range hidden">
+                            <div class="control-group control-group-datetime">
+                                <label for="startTime">From</label>
+                                <input id="startTime" type="datetime-local" step="60" disabled>
+                            </div>
+                            <div class="control-group control-group-datetime">
+                                <label for="endTime">To</label>
+                                <input id="endTime" type="datetime-local" step="60" disabled>
+                            </div>
+                        </div>
+                        <div class="control-actions">
+                            <button id="fetchBtn" type="button">Fetch Metrics</button>
+                            <button id="pinBtn" type="button">Save Test</button>
+                        </div>
+                    </section>
+
+                    <section class="card range-info">
+                        <span>Selected Range:</span>
+                        <strong id="rangeLabel">Last 1 hour (to now)</strong>
+                        <em>Timezone: IST</em>
+                    </section>
+
+                    <section class="card pinned-results" id="savedTestsSection">
+                        <div class="saved-tests-head">
+                            <h2>Saved Tests</h2>
+                            <span id="projectTestCount" class="badge-pill">0 tests</span>
+                        </div>
+                        <div class="pinned-controls">
+                            <select id="pinnedSelect">
+                                <option value="">No saved tests</option>
+                            </select>
+                            <button id="loadPinnedBtn" type="button">Load Test</button>
+                            <button id="deletePinnedBtn" type="button">Delete Test</button>
+                        </div>
+                    </section>
+
+                    <section class="card hidden" id="journeyServicesBar">
+                        <div class="saved-tests-head">
+                            <h2>Services in this test</h2>
+                            <span id="multiServiceCount" class="badge-pill">0 services</span>
+                        </div>
+                        <p class="compare-hint">Switch a service to view its metrics, traces, and charts. All selected services are saved with this test.</p>
+                        <div id="serviceFocusList" class="endpoint-list"></div>
+                    </section>
+
+                    <section class="stats-grid" id="monitorMetricsSection">
+                        <article class="card stat">
+                            <h3>Avg CPU (%)</h3>
+                            <p id="avgCpu">--</p>
+                        </article>
+                        <article class="card stat">
+                            <h3>Avg Memory (%)</h3>
+                            <p id="avgMemory">--</p>
+                        </article>
+                        <article class="card stat">
+                            <h3>HPA Current</h3>
+                            <p id="hpaCurrent">--</p>
+                        </article>
+                        <article class="card stat">
+                            <h3>HPA Desired</h3>
+                            <p id="hpaDesired">--</p>
+                        </article>
+                        <article class="card stat">
+                            <h3>Max RPM</h3>
+                            <p id="maxRpm">--</p>
+                        </article>
+                        <article class="card stat">
+                            <h3>Total RPM</h3>
+                            <p id="totalRpm">--</p>
+                        </article>
+                    </section>
+
+                    <section class="charts-grid charts-grid-duo">
+                        <article class="card chart-card">
+                            <div class="chart-card-head">
+                                <h2 id="cpuMemoryTitle">CPU &amp; Memory</h2>
+                                <span class="chart-range-badge chart-range-sync">Last 1 hour</span>
+                            </div>
+                            <div id="cpuMemoryLegend" class="chart-legend-pills" aria-label="CPU and memory series"></div>
+                            <div class="chart-canvas-wrap">
+                                <canvas id="cpuMemoryChart"></canvas>
+                            </div>
+                        </article>
+                        <article class="card chart-card">
+                            <div class="chart-card-head">
+                                <div class="throughput-head">
+                                    <h2 id="hpaTitle">HPA Scaling</h2>
+                                    <span id="hpaName">--</span>
+                                </div>
+                                <span class="chart-range-badge chart-range-sync">Last 1 hour</span>
+                            </div>
+                            <div id="hpaLegend" class="chart-legend-pills" aria-label="HPA series"></div>
+                            <div class="chart-canvas-wrap">
+                                <canvas id="hpaChart"></canvas>
+                            </div>
+                        </article>
+                    </section>
+
+                    <section class="card service-panel" id="servicePanel">
+                        <div class="panel-block">
+                            <div class="throughput-head">
+                                <h2>Response &amp; Throughput</h2>
+                                <span id="throughputScope">Overall</span>
+                            </div>
+                            <div id="endpointList" class="endpoint-list"></div>
+                        </div>
+                        <div class="panel-charts-row">
+                            <div class="panel-chart" id="latencyPane">
+                                <div class="chart-card-head compact">
+                                    <h3 id="latencyTitle">Response Time (p50 / p90 / p95)</h3>
+                                    <span class="chart-range-badge chart-range-sync">Last 1 hour</span>
+                                </div>
+                                <span id="latencyScope" class="sr-only">Overall</span>
+                                <div id="latencyLegend" class="chart-legend-pills" aria-label="Latency series"></div>
+                                <div class="chart-canvas-wrap chart-canvas-wrap-sm">
+                                    <canvas id="latencyChart"></canvas>
+                                </div>
+                            </div>
+                            <div class="panel-chart" id="throughputPane">
+                                <div class="chart-card-head compact">
+                                    <h3 id="throughputTitle">Throughput (RPM)</h3>
+                                    <span class="chart-range-badge chart-range-sync">Last 1 hour</span>
+                                </div>
+                                <span id="throughputChartScope" class="sr-only">Overall</span>
+                                <div id="throughputLegend" class="chart-legend-pills" aria-label="Throughput series"></div>
+                                <div class="chart-canvas-wrap chart-canvas-wrap-sm">
+                                    <canvas id="throughputChart"></canvas>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="panel-traces" id="tracesPane">
+                            <div class="chart-card-head compact">
+                                <h3>Transaction Traces</h3>
+                                <div class="traces-head-meta">
+                                    <label class="traces-filter">
+                                        <input type="checkbox" id="tracesBreakdownFilter">
+                                        <span>With breakdown only</span>
+                                    </label>
+                                    <span id="tracesScope">Overall</span>
+                                </div>
+                            </div>
+                            <p id="tracesStatus" class="traces-status">Fetch metrics to load traces for this time range.</p>
+                            <div class="compare-table-wrap">
+                                <table class="compare-table traces-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Time (IST)</th>
+                                            <th>Endpoint</th>
+                                            <th>Duration</th>
+                                            <th>Status</th>
+                                            <th>URI</th>
+                                            <th>Host</th>
+                                            <th>Trace ID</th>
+                                            <th></th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="tracesTableBody">
+                                        <tr>
+                                            <td colspan="8">No traces loaded.</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </section>
+
+                    <section class="card ai-chat-card" id="aiAnalysisSection">
+                        <div class="analysis-topbar">
+                            <div>
+                                <h2>AI Analysis</h2>
+                                <p id="analysisBox" class="analysis-status">Fetch metrics to start a performance chat.</p>
+                            </div>
+                            <div class="analysis-model-row">
+                                <label class="traces-filter analysis-trace-opt">
+                                    <input type="checkbox" id="analysisIncludeTraces">
+                                    <span>Include traces + breakdowns</span>
+                                </label>
+                                <select id="analysisModelSelect" aria-label="Select AI model">
+                                    <option value="">Auto</option>
+                                    <option value="gpt-5-mini">gpt-5-mini</option>
+                                    <option value="gpt-5">gpt-5</option>
+                                    <option value="claude-4.6-sonnet-medium-thinking">claude-4.6-sonnet-medium-thinking</option>
+                                    <option value="gemini-3.8-flash-medium">gemini-3.8-flash-medium</option>
+                                    <option value="auto">auto</option>
+                                </select>
+                                <button id="savePinBtn" type="button">Update Test</button>
+                            </div>
+                        </div>
+                        <div class="ai-chat-body">
+                            <div id="askResponses" class="analysis-thread" aria-live="polite"></div>
+                            <div class="analysis-chat-dock">
+                                <button id="analyzeBtn" type="button">Run AI Analysis</button>
+                                <div class="analysis-chat-input">
+                                    <textarea id="askInput" rows="1" placeholder="Ask about latency spikes, HPA, traces..."></textarea>
+                                    <button id="askBtn" type="button" aria-label="Send message">Send</button>
+                                </div>
+                            </div>
+                        </div>
+                    </section>
+        </div>
+
+        <div id="compareView" class="view-panel" hidden>
+                    <section class="card compare-toolbar">
+                        <div>
+                            <h2 class="compare-page-title">Compare Performance Tests</h2>
+                            <p class="compare-hint">Overlay two result sets and see metric deltas without leaving the project.</p>
+                        </div>
+                        <div class="compare-modes" role="tablist" aria-label="Compare mode">
+                            <button type="button" class="compare-mode-btn is-active" id="compareSavedModeBtn" data-compare-mode="saved">Saved tests</button>
+                            <button type="button" class="compare-mode-btn" id="compareRangeModeBtn" data-compare-mode="ranges">Time ranges</button>
+                        </div>
+                    </section>
+
+                    <section class="card compare-panel" id="compareSavedPanel">
+                        <div class="compare-split">
+                            <div class="control-group">
+                                <label for="comparePinA">Baseline (A)</label>
+                                <select id="comparePinA"></select>
+                            </div>
+                            <div class="compare-vs" aria-hidden="true">vs</div>
+                            <div class="control-group">
+                                <label for="comparePinB">Candidate (B)</label>
+                                <select id="comparePinB"></select>
+                            </div>
+                        </div>
+                        <button type="button" id="compareSavedBtn">Compare tests</button>
+                    </section>
+
+                    <section class="card compare-panel hidden" id="compareRangePanel">
+                        <div class="control-group">
+                            <label for="compareServiceSelect">Service</label>
+                            <select id="compareServiceSelect"></select>
+                        </div>
+                        <div class="compare-split compare-split-ranges">
+                            <div class="compare-range-card range-a-card">
+                                <h3><span class="range-badge range-badge-a">A</span> Range A</h3>
+                                <div class="control-group">
+                                    <label for="compareRangeAPreset">Time Range</label>
+                                    <select id="compareRangeAPreset"></select>
+                                </div>
+                                <div id="compareRangeACustom" class="custom-time-wrap hidden">
+                                    <div class="control-group">
+                                        <label for="compareRangeAStart">From</label>
+                                        <input id="compareRangeAStart" type="datetime-local" step="60" disabled>
+                                    </div>
+                                    <div class="control-group">
+                                        <label for="compareRangeAEnd">To</label>
+                                        <input id="compareRangeAEnd" type="datetime-local" step="60" disabled>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="compare-vs" aria-hidden="true">vs</div>
+                            <div class="compare-range-card range-b-card">
+                                <h3><span class="range-badge range-badge-b">B</span> Range B</h3>
+                                <div class="control-group">
+                                    <label for="compareRangeBPreset">Time Range</label>
+                                    <select id="compareRangeBPreset"></select>
+                                </div>
+                                <div id="compareRangeBCustom" class="custom-time-wrap hidden">
+                                    <div class="control-group">
+                                        <label for="compareRangeBStart">From</label>
+                                        <input id="compareRangeBStart" type="datetime-local" step="60" disabled>
+                                    </div>
+                                    <div class="control-group">
+                                        <label for="compareRangeBEnd">To</label>
+                                        <input id="compareRangeBEnd" type="datetime-local" step="60" disabled>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <button type="button" id="compareRangeBtn">Compare ranges</button>
+                    </section>
+
+                    <p id="compareStatus" class="analysis-status compare-status">Choose two saved tests or two time ranges to compare.</p>
+
+                    <section class="chart-legend-pills compare-legend hidden" id="compareLegend">
+                        <span class="chart-legend-pill">
+                            <i class="chart-legend-swatch swatch-a"></i>
+                            <strong id="compareLabelA">A</strong>
+                        </span>
+                        <span class="chart-legend-pill">
+                            <i class="chart-legend-swatch swatch-b"></i>
+                            <strong id="compareLabelB">B</strong>
+                        </span>
+                    </section>
+
+                    <section class="card hidden compare-table-card" id="compareTableCard">
+                        <h2>Metric comparison</h2>
+                        <div class="compare-table-wrap">
+                            <table class="compare-table">
+                                <thead>
+                                    <tr>
+                                        <th>Metric</th>
+                                        <th>A</th>
+                                        <th>B</th>
+                                        <th>Change (B − A)</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="compareTableBody"></tbody>
+                            </table>
+                        </div>
+                    </section>
+
+                    <section class="charts-grid compare-charts hidden" id="compareCharts">
+                        <article class="card chart-card">
+                            <div class="chart-card-head"><h2>CPU %</h2></div>
+                            <div id="compareCpuLegend" class="chart-legend-pills" aria-label="Compare CPU series"></div>
+                            <div class="chart-canvas-wrap chart-canvas-wrap-sm"><canvas id="compareCpuChart"></canvas></div>
+                        </article>
+                        <article class="card chart-card">
+                            <div class="chart-card-head"><h2>Memory %</h2></div>
+                            <div id="compareMemLegend" class="chart-legend-pills" aria-label="Compare memory series"></div>
+                            <div class="chart-canvas-wrap chart-canvas-wrap-sm"><canvas id="compareMemChart"></canvas></div>
+                        </article>
+                        <article class="card chart-card">
+                            <div class="chart-card-head"><h2>HPA current replicas</h2></div>
+                            <div id="compareHpaLegend" class="chart-legend-pills" aria-label="Compare HPA series"></div>
+                            <div class="chart-canvas-wrap chart-canvas-wrap-sm"><canvas id="compareHpaChart"></canvas></div>
+                        </article>
+                        <article class="card chart-card">
+                            <div class="chart-card-head"><h2>Response time p95 (ms)</h2></div>
+                            <div id="compareLatencyLegend" class="chart-legend-pills" aria-label="Compare latency series"></div>
+                            <div class="chart-canvas-wrap chart-canvas-wrap-sm"><canvas id="compareLatencyChart"></canvas></div>
+                        </article>
+                        <article class="card chart-card chart-card-wide">
+                            <div class="chart-card-head"><h2>Throughput (RPM)</h2></div>
+                            <div id="compareRpmLegend" class="chart-legend-pills" aria-label="Compare throughput series"></div>
+                            <div class="chart-canvas-wrap"><canvas id="compareRpmChart"></canvas></div>
+                        </article>
+                    </section>
+
+                    <section class="compare-traces-grid hidden" id="compareTraces">
+                        <article class="card chart-card">
+                            <div class="chart-card-head compact">
+                                <h2>Traces · <span id="compareTracesLabelA">A</span></h2>
+                            </div>
+                            <p id="compareTracesStatusA" class="traces-status">No traces loaded.</p>
+                            <div class="compare-table-wrap">
+                                <table class="compare-table traces-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Time (IST)</th>
+                                            <th>Endpoint</th>
+                                            <th>Duration</th>
+                                            <th>Status</th>
+                                            <th>URI</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="compareTracesBodyA">
+                                        <tr><td colspan="5">No traces loaded.</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </article>
+                        <article class="card chart-card">
+                            <div class="chart-card-head compact">
+                                <h2>Traces · <span id="compareTracesLabelB">B</span></h2>
+                            </div>
+                            <p id="compareTracesStatusB" class="traces-status">No traces loaded.</p>
+                            <div class="compare-table-wrap">
+                                <table class="compare-table traces-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Time (IST)</th>
+                                            <th>Endpoint</th>
+                                            <th>Duration</th>
+                                            <th>Status</th>
+                                            <th>URI</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="compareTracesBodyB">
+                                        <tr><td colspan="5">No traces loaded.</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </article>
+                    </section>
+        </div>
+    </div>
+
+    <div id="traceBreakdown" class="trace-modal hidden" role="dialog" aria-modal="true" aria-labelledby="traceBreakdownTitle">
+        <div class="trace-modal-backdrop" id="traceBreakdownBackdrop"></div>
+        <div class="trace-modal-panel">
+            <div class="trace-modal-head">
+                <div>
+                    <h3 id="traceBreakdownTitle">Trace breakdown</h3>
+                    <p id="traceBreakdownStatus" class="traces-status">Click a trace row to load its span breakdown.</p>
+                    <code id="traceBreakdownId" class="trace-id-chip">Select a trace</code>
+                </div>
+                <button type="button" id="traceBreakdownClose" class="trace-modal-close" aria-label="Close breakdown">Close</button>
+            </div>
+            <div class="trace-modal-table-wrap">
+                <table class="breakdown-table">
+                    <thead>
+                        <tr>
+                            <th>Span</th>
+                            <th>Duration</th>
+                            <th>Share</th>
+                            <th>Timeline</th>
+                            <th>Service</th>
+                            <th>Kind</th>
+                            <th>Detail</th>
+                        </tr>
+                    </thead>
+                    <tbody id="traceBreakdownBody">
+                        <tr>
+                            <td colspan="7">No breakdown loaded.</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/app.js?v=32"></script>
+</body>
+</html>

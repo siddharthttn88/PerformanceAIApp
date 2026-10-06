@@ -1,0 +1,8 @@
+fastapi
+uvicorn[standard]
+pydantic
+python-dotenv
+fastapi>=0.115
+uvicorn[standard]>=0.34
+mcp>=2.0,<3
+httpx2>=0.27
