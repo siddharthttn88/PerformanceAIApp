@@ -119,6 +119,8 @@ let analysisConversation = [];
 let analysisSessionId = localStorage.getItem(ANALYSIS_SESSION_KEY) || null;
 let pinnedResults = [];
 let projects = [];
+/** When set, trace loads prefer saved journey_json traces instead of live NRQL. */
+let activePinnedTracesPinId = null;
 
 const RANGE_LABELS = {
     "now-5m": "Last 5 minutes",
@@ -1000,11 +1002,15 @@ function renderServiceFocusChips() {
 
 function showServiceMetrics(metrics, traces) {
     metricsCache = metrics;
-    tracesCache = traces && Array.isArray(traces.items) ? traces : { items: [], count: 0 };
     selectedEndpoint = "";
     renderStats(metrics);
     renderCharts(metrics);
     renderServiceFocusChips();
+    if (activePinnedTracesPinId && serviceSelect.value) {
+        loadTraces("");
+        return;
+    }
+    tracesCache = traces && Array.isArray(traces.items) ? traces : { items: [], count: 0 };
     if (tracesCache.items.length) {
         renderTraces(tracesCache, "");
     } else {
@@ -1353,9 +1359,21 @@ async function loadTraceBreakdown(item) {
     });
     openTraceBreakdownModal();
     traceBreakdownIdEl.textContent = traceId;
-    const cached = findCachedTrace(traceId);
+    const cached = findCachedTrace(traceId)
+        || (Array.isArray(item.spans) && item.spans.length ? item : null);
     if (cached && Array.isArray(cached.spans) && cached.spans.length) {
         renderTraceBreakdown({ items: cached.spans, traceId });
+        return;
+    }
+    if (activePinnedTracesPinId) {
+        traceBreakdownStatusEl.textContent = "No saved span breakdown for this trace.";
+        traceBreakdownBodyEl.innerHTML = "";
+        const row = document.createElement("tr");
+        const cell = document.createElement("td");
+        cell.colSpan = 7;
+        cell.textContent = "This trace was saved without span data.";
+        row.appendChild(cell);
+        traceBreakdownBodyEl.appendChild(row);
         return;
     }
     traceBreakdownStatusEl.textContent = "Loading span breakdown...";
@@ -1403,6 +1421,24 @@ async function loadTraces(endpointName = selectedEndpoint) {
         ? "Loading traces with span breakdown..."
         : "Loading traces...";
     resetTraceBreakdown();
+    if (activePinnedTracesPinId) {
+        const saved = resolveTracesForEndpoint(serviceSelect.value, endpointName);
+        if (saved) {
+            const data = applyTracesBreakdownFilter(saved);
+            if (requestId !== tracesRequestId) {
+                return;
+            }
+            renderTraces(data, endpointName);
+            tracesCache = data;
+            const savedNote = "Loaded from saved test.";
+            if (data.withBreakdown || (tracesBreakdownFilterEl && tracesBreakdownFilterEl.checked)) {
+                tracesStatusEl.textContent = `Showing ${data.count || 0} traces with span breakdown for ${seriesLabel}. ${savedNote}`;
+            } else {
+                tracesStatusEl.textContent = `Showing ${data.count || 0} slowest traces for ${seriesLabel}. ${savedNote}`;
+            }
+            return;
+        }
+    }
     try {
         const range = getRange();
         const response = await fetch("/api/traces", {
@@ -1464,11 +1500,28 @@ async function selectEndpoint(name) {
     if (!name) {
         selectedEndpoint = "";
         renderEndpointList(metricsCache.endpoints || []);
-        renderLatency(metricsCache.response_time_ms || {}, "");
-        renderThroughput(metricsCache.throughput || {}, "");
+        const overall = resolveEndpointMetrics(serviceSelect.value, "") || {
+            throughput: metricsCache.throughput || {},
+            response_time_ms: metricsCache.response_time_ms || {},
+        };
+        renderLatency(overall.response_time_ms || {}, "");
+        renderThroughput(overall.throughput || {}, "");
         pulseServicePanel();
         loadTraces("");
         return;
+    }
+
+    if (activePinnedTracesPinId) {
+        const saved = resolveEndpointMetrics(serviceSelect.value, name);
+        if (saved) {
+            selectedEndpoint = name;
+            renderEndpointList(metricsCache.endpoints || []);
+            renderLatency(saved.response_time_ms || {}, name);
+            renderThroughput(saved.throughput || {}, name);
+            pulseServicePanel();
+            loadTraces(name);
+            return;
+        }
     }
 
     const requestId = ++endpointRequestId;
@@ -1479,25 +1532,17 @@ async function selectEndpoint(name) {
 
     try {
         const range = getRange();
-        const response = await fetch("/api/throughput", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-                service: serviceSelect.value,
-                start_time: range.start_time,
-                end_time: range.end_time,
-                endpoint: name,
-            }),
-        });
-        const data = await response.json();
-        if (!response.ok) {
-            throw new Error(typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail));
-        }
+        const slice = await fetchEndpointMetricsSlice(
+            serviceSelect.value,
+            range.start_time,
+            range.end_time,
+            name,
+        );
         if (requestId !== endpointRequestId) {
             return;
         }
-        renderLatency(data.response_time_ms || {}, name);
-        renderThroughput(data, name);
+        renderLatency(slice.response_time_ms || {}, name);
+        renderThroughput(slice.throughput || {}, name);
         pulseServicePanel();
         loadTraces(name);
     } catch (error) {
@@ -1678,21 +1723,227 @@ function currentMetricRange() {
     return getRange();
 }
 
+function normalizeServiceMetricsBundle(metrics) {
+    if (!metrics || typeof metrics !== "object") {
+        return null;
+    }
+    const byEndpoint = metrics.byEndpoint && typeof metrics.byEndpoint === "object"
+        ? { ...metrics.byEndpoint }
+        : {};
+    if (!byEndpoint[""]) {
+        byEndpoint[""] = {
+            throughput: metrics.throughput || {},
+            response_time_ms: metrics.response_time_ms || {},
+        };
+    }
+    return { ...metrics, byEndpoint };
+}
+
+function getServiceMetricsBundle(service) {
+    const row = multiMetricsCache.find((entry) => entry.service === service);
+    if (row?.metrics) {
+        return row.metrics;
+    }
+    if (service === serviceSelect.value && metricsCache) {
+        return metricsCache;
+    }
+    return null;
+}
+
+function resolveEndpointMetrics(service, endpointName) {
+    const metrics = normalizeServiceMetricsBundle(getServiceMetricsBundle(service));
+    if (!metrics) {
+        return null;
+    }
+    const key = endpointName || "";
+    return metrics.byEndpoint[key] || null;
+}
+
+async function fetchEndpointMetricsSlice(service, startTime, endTime, endpoint) {
+    const response = await fetch("/api/throughput", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+            service,
+            start_time: startTime,
+            end_time: endTime,
+            endpoint: endpoint || null,
+        }),
+    });
+    const data = await response.json();
+    if (!response.ok) {
+        throw new Error(typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail));
+    }
+    const { response_time_ms, ...throughput } = data;
+    return {
+        throughput,
+        response_time_ms: response_time_ms || {},
+    };
+}
+
+async function collectServiceMetricsForPin(service, range, baseMetrics) {
+    const endpoints = Array.isArray(baseMetrics?.endpoints) ? baseMetrics.endpoints : [];
+    const normalized = normalizeServiceMetricsBundle(baseMetrics);
+    const byEndpoint = { ...(normalized?.byEndpoint || {}) };
+    if (!byEndpoint[""]?.throughput?.timestamps?.length) {
+        byEndpoint[""] = {
+            throughput: baseMetrics.throughput || {},
+            response_time_ms: baseMetrics.response_time_ms || {},
+        };
+    }
+    for (const endpoint of endpoints) {
+        if (!endpoint) {
+            continue;
+        }
+        const existing = byEndpoint[endpoint];
+        const hasSeries = Array.isArray(existing?.throughput?.timestamps) && existing.throughput.timestamps.length;
+        if (!hasSeries) {
+            byEndpoint[endpoint] = await fetchEndpointMetricsSlice(
+                service,
+                range.start_time,
+                range.end_time,
+                endpoint,
+            );
+        }
+    }
+    return { ...baseMetrics, byEndpoint };
+}
+
+function endpointTraceKey(endpointName) {
+    return endpointName || "";
+}
+
+function normalizeServiceTracesBundle(bundle) {
+    if (!bundle || typeof bundle !== "object") {
+        return { items: [], count: 0, withBreakdown: true, byEndpoint: {} };
+    }
+    const byEndpoint = bundle.byEndpoint && typeof bundle.byEndpoint === "object"
+        ? { ...bundle.byEndpoint }
+        : {};
+    if (!byEndpoint[""] && Array.isArray(bundle.items)) {
+        byEndpoint[""] = {
+            items: bundle.items,
+            count: bundle.count ?? bundle.items.length,
+            withBreakdown: Boolean(bundle.withBreakdown),
+            endpoint: null,
+        };
+    }
+    const overall = byEndpoint[""] || { items: [], count: 0, withBreakdown: true, endpoint: null };
+    return {
+        ...overall,
+        items: overall.items || [],
+        count: overall.count ?? (overall.items || []).length,
+        withBreakdown: Boolean(overall.withBreakdown ?? bundle.withBreakdown),
+        byEndpoint,
+    };
+}
+
+function resolveTracesForEndpoint(service, endpointName) {
+    const bundle = tracesByServiceCache[service];
+    if (!bundle) {
+        return null;
+    }
+    const normalized = normalizeServiceTracesBundle(bundle);
+    const key = endpointTraceKey(endpointName);
+    if (normalized.byEndpoint[key]) {
+        return normalized.byEndpoint[key];
+    }
+    if (!endpointName) {
+        return normalized;
+    }
+    return null;
+}
+
+function applyTracesBreakdownFilter(payload) {
+    if (!payload) {
+        return payload;
+    }
+    if (!tracesBreakdownFilterEl || !tracesBreakdownFilterEl.checked) {
+        return payload;
+    }
+    const items = (Array.isArray(payload.items) ? payload.items : []).filter(
+        (item) => Array.isArray(item.spans) && item.spans.length > 0,
+    );
+    return {
+        ...payload,
+        items,
+        count: items.length,
+        withBreakdown: true,
+    };
+}
+
+function mergeTraceSpansIntoPayload(payload, traceId, spans) {
+    if (!payload || !Array.isArray(payload.items)) {
+        return payload;
+    }
+    const items = payload.items.map((item) => {
+        if ((item.traceId || item.guid) === traceId) {
+            return { ...item, spans };
+        }
+        return item;
+    });
+    return { ...payload, items, count: items.length };
+}
+
+function storeTraceSpansInServiceCache(service, endpointName, traceId, spans) {
+    const bundle = tracesByServiceCache[service];
+    if (!bundle) {
+        return;
+    }
+    const normalized = normalizeServiceTracesBundle(bundle);
+    const key = endpointTraceKey(endpointName);
+    const keysToUpdate = new Set([key, ""]);
+    if (normalized.byEndpoint) {
+        for (const endpointKey of Object.keys(normalized.byEndpoint)) {
+            const slice = normalized.byEndpoint[endpointKey];
+            if (slice?.items?.some((item) => (item.traceId || item.guid) === traceId)) {
+                keysToUpdate.add(endpointKey);
+            }
+        }
+    }
+    for (const endpointKey of keysToUpdate) {
+        if (!normalized.byEndpoint[endpointKey]) {
+            continue;
+        }
+        normalized.byEndpoint[endpointKey] = mergeTraceSpansIntoPayload(
+            normalized.byEndpoint[endpointKey],
+            traceId,
+            spans,
+        );
+    }
+    const overall = normalized.byEndpoint[""] || normalized;
+    tracesByServiceCache[service] = {
+        ...overall,
+        items: overall.items || [],
+        count: overall.count ?? (overall.items || []).length,
+        byEndpoint: normalized.byEndpoint,
+    };
+}
+
 function findCachedTrace(traceId) {
     const items = tracesCache && Array.isArray(tracesCache.items) ? tracesCache.items : [];
-    return items.find((item) => (item.traceId || item.guid) === traceId) || null;
+    const hit = items.find((item) => (item.traceId || item.guid) === traceId);
+    if (hit) {
+        return hit;
+    }
+    const service = serviceSelect.value;
+    if (!service) {
+        return null;
+    }
+    const bundle = resolveTracesForEndpoint(service, selectedEndpoint)
+        || resolveTracesForEndpoint(service, "");
+    const pool = bundle && Array.isArray(bundle.items) ? bundle.items : [];
+    return pool.find((item) => (item.traceId || item.guid) === traceId) || null;
 }
 
 function storeTraceSpans(traceId, spans) {
     if (!tracesCache || !Array.isArray(tracesCache.items)) {
         tracesCache = { items: [], count: 0 };
     }
-    tracesCache.items = tracesCache.items.map((item) => {
-        if ((item.traceId || item.guid) === traceId) {
-            return { ...item, spans };
-        }
-        return item;
-    });
+    tracesCache = mergeTraceSpansIntoPayload(tracesCache, traceId, spans);
+    if (serviceSelect.value) {
+        storeTraceSpansInServiceCache(serviceSelect.value, selectedEndpoint, traceId, spans);
+    }
 }
 
 async function fetchSpanBreakdown(item, range, service) {
@@ -1734,32 +1985,79 @@ async function attachSpanBreakdowns(items, range, service) {
     );
 }
 
+async function collectTracesSliceForPin(service, range, endpointName, metrics) {
+    const existing = resolveTracesForEndpoint(service, endpointName);
+    const hasSavedSpans = existing
+        && Array.isArray(existing.items)
+        && existing.items.length
+        && existing.items.every((item) => Array.isArray(item.spans) && item.spans.length);
+    if (hasSavedSpans) {
+        return {
+            ...existing,
+            endpoint: endpointName || null,
+            withBreakdown: true,
+        };
+    }
+    const base = await fetchTracesPayload(
+        service,
+        range.start_time,
+        range.end_time,
+        true,
+        endpointName || null,
+    );
+    const items = await attachSpanBreakdowns(base.items || [], range, service);
+    return {
+        ...base,
+        endpoint: endpointName || null,
+        items,
+        count: items.length,
+        withBreakdown: true,
+    };
+}
+
+async function collectServiceTracesForPin(service, range, metrics) {
+    const endpoints = Array.isArray(metrics?.endpoints) ? metrics.endpoints : [];
+    const overall = await collectTracesSliceForPin(service, range, "", metrics);
+    const byEndpoint = { "": overall };
+    for (const endpoint of endpoints) {
+        if (!endpoint) {
+            continue;
+        }
+        byEndpoint[endpoint] = await collectTracesSliceForPin(service, range, endpoint, metrics);
+    }
+    return {
+        ...overall,
+        byEndpoint,
+    };
+}
+
 async function collectTracesForPin() {
     const range = currentMetricRange();
     const names = selectedServices.length ? selectedServices : [serviceSelect.value];
+    const metricsLookup = Object.fromEntries(
+        (multiMetricsCache.length ? multiMetricsCache : [{ service: serviceSelect.value, metrics: metricsCache }])
+            .filter((row) => row.service && row.metrics)
+            .map((row) => [row.service, row.metrics]),
+    );
     const byService = {};
     for (const service of names) {
         if (!service) {
             continue;
         }
-        const cached = service === serviceSelect.value && tracesCache && Array.isArray(tracesCache.items) && tracesCache.items.length
-            ? tracesCache
-            : tracesByServiceCache[service];
-        const base = cached && Array.isArray(cached.items) && cached.items.length
-            ? cached
-            : await fetchTracesPayload(service, range.start_time, range.end_time, true);
-        const items = await attachSpanBreakdowns(base.items || [], range, service);
-        byService[service] = {
-            ...base,
-            items,
-            count: items.length,
-            withBreakdown: true,
-        };
+        byService[service] = await collectServiceTracesForPin(
+            service,
+            range,
+            metricsLookup[service] || metricsCache,
+        );
     }
     tracesByServiceCache = byService;
-    tracesCache = byService[serviceSelect.value] || { items: [], count: 0 };
+    const focused = serviceSelect.value;
+    const focusedSlice = resolveTracesForEndpoint(focused, selectedEndpoint)
+        || resolveTracesForEndpoint(focused, "")
+        || { items: [], count: 0 };
+    tracesCache = focusedSlice;
     return {
-        ...tracesCache,
+        ...focusedSlice,
         byService,
     };
 }
@@ -1816,6 +2114,7 @@ async function fetchMetrics() {
         if (!services.length) {
             throw new Error("Select at least one service.");
         }
+        activePinnedTracesPinId = null;
         if (services.length === 1) {
             const data = await fetchMetricsPayload(services[0], range.start_time, range.end_time);
             tracesByServiceCache = {};
@@ -1905,6 +2204,29 @@ async function buildPinPayload() {
     } catch (_error) {
         traces = tracesCache || traces;
     }
+    const metricRange = currentMetricRange();
+    const metricRows = multiMetricsCache.length
+        ? multiMetricsCache
+        : [{ service: serviceSelect.value, metrics: metricsCache }];
+    const metricsByService = {};
+    for (const row of metricRows) {
+        if (!row.service || !row.metrics) {
+            continue;
+        }
+        metricsByService[row.service] = await collectServiceMetricsForPin(
+            row.service,
+            metricRange,
+            row.metrics,
+        );
+    }
+    const primaryMetrics = metricsByService[serviceSelect.value] || metricsCache;
+    if (primaryMetrics) {
+        metricsCache = primaryMetrics;
+    }
+    multiMetricsCache = Object.entries(metricsByService).map(([service, metrics]) => ({
+        service,
+        metrics,
+    }));
     return {
         projectId: projectSelect.value,
         testName: testNameInput.value.trim(),
@@ -1915,7 +2237,7 @@ async function buildPinPayload() {
         endTimeInput: endTimeInput.value || null,
         startTime: absolute.start.toISOString(),
         endTime: absolute.end.toISOString(),
-        metrics: metricsCache,
+        metrics: primaryMetrics || metricsCache,
         analysis: analysisBox.textContent || "",
         analysisConversation,
         analysisSessionId,
@@ -1923,11 +2245,7 @@ async function buildPinPayload() {
         savedAtIST,
         traces,
         services: selectedServices,
-        metricsByService: Object.fromEntries(
-            (multiMetricsCache.length ? multiMetricsCache : [{ service: serviceSelect.value, metrics: metricsCache }])
-                .filter((row) => row.service && row.metrics)
-                .map((row) => [row.service, row.metrics]),
-        ),
+        metricsByService,
         tracesByService: traces.byService || tracesByServiceCache || {},
     };
 }
@@ -1959,6 +2277,7 @@ async function pinCurrentResult() {
         await loadProjects(projectSelect.value);
         if (data.id) {
             pinnedSelect.value = data.id;
+            activePinnedTracesPinId = data.id;
         }
         analysisBox.textContent = "Test saved with traces and breakdowns.";
     } catch (error) {
@@ -2035,13 +2354,25 @@ async function loadPinnedResult() {
     const metricsByService = item.metricsByService && typeof item.metricsByService === "object"
         ? item.metricsByService
         : {};
-    tracesByServiceCache = item.tracesByService && typeof item.tracesByService === "object"
+    const rawTracesByService = item.tracesByService && typeof item.tracesByService === "object"
         ? item.tracesByService
         : (item.traces && item.traces.byService) || {};
-    multiMetricsCache = services.map((name) => ({
-        service: name,
-        metrics: metricsByService[name] || (name === item.service ? item.metrics : null),
-    })).filter((row) => row.metrics);
+    tracesByServiceCache = {};
+    for (const [name, bundle] of Object.entries(rawTracesByService)) {
+        tracesByServiceCache[name] = normalizeServiceTracesBundle(bundle);
+    }
+    if (!Object.keys(tracesByServiceCache).length && item.traces) {
+        const legacyService = item.service || services[0];
+        if (legacyService) {
+            tracesByServiceCache[legacyService] = normalizeServiceTracesBundle(item.traces);
+        }
+    }
+    activePinnedTracesPinId = selectedId;
+    multiMetricsCache = services.map((name) => {
+        const raw = metricsByService[name] || (name === item.service ? item.metrics : null);
+        const metrics = normalizeServiceMetricsBundle(raw);
+        return metrics ? { service: name, metrics } : null;
+    }).filter(Boolean);
     const focused = multiMetricsCache.find((row) => row.service === item.service) || multiMetricsCache[0];
     if (focused) {
         showServiceMetrics(focused.metrics, tracesByServiceCache[focused.service] || item.traces);
@@ -2503,7 +2834,7 @@ function renderCompareTraces(tracesA, tracesB, labelA, labelB) {
     renderCompareTraceTable(compareTracesBodyB, compareTracesStatusB, tracesB, labelB);
 }
 
-async function fetchTracesPayload(service, startTime, endTime, withBreakdown = false) {
+async function fetchTracesPayload(service, startTime, endTime, withBreakdown = false, endpoint = null) {
     if (!service || !startTime || !endTime) {
         return { items: [], count: 0 };
     }
@@ -2515,6 +2846,7 @@ async function fetchTracesPayload(service, startTime, endTime, withBreakdown = f
                 service,
                 start_time: startTime,
                 end_time: endTime,
+                endpoint: endpoint || null,
                 withBreakdown: Boolean(withBreakdown),
             }),
         });
