@@ -165,6 +165,7 @@ class PinRequest(BaseModel):
     services: list[str] = Field(default_factory=list)
     metricsByService: dict[str, Any] | None = None
     tracesByService: dict[str, Any] | None = None
+    endpointMetricsByService: dict[str, Any] | None = None
 
 
 ENV_PATTERN = re.compile(r"\$\{([^}]+)\}")
@@ -941,6 +942,11 @@ def _pin_full_from_row(row: sqlite3.Row) -> dict[str, Any]:
     services = journey.get("services") if isinstance(journey.get("services"), list) else []
     metrics_by_service = journey.get("metricsByService") if isinstance(journey.get("metricsByService"), dict) else {}
     traces_by_service = journey.get("tracesByService") if isinstance(journey.get("tracesByService"), dict) else {}
+    endpoint_metrics_by_service = (
+        journey.get("endpointMetricsByService")
+        if isinstance(journey.get("endpointMetricsByService"), dict)
+        else {}
+    )
     return {
         "id": str(row["id"]),
         "projectId": str(row["project_id"]),
@@ -962,6 +968,7 @@ def _pin_full_from_row(row: sqlite3.Row) -> dict[str, Any]:
         "services": services,
         "metricsByService": metrics_by_service,
         "tracesByService": traces_by_service,
+        "endpointMetricsByService": endpoint_metrics_by_service,
     }
 
 
@@ -2144,6 +2151,7 @@ def create_pin(request: PinRequest) -> dict[str, str]:
                         "services": request.services or [],
                         "metricsByService": request.metricsByService or {},
                         "tracesByService": request.tracesByService or {},
+                        "endpointMetricsByService": request.endpointMetricsByService or {},
                     },
                     ensure_ascii=True,
                 ),
@@ -2201,6 +2209,7 @@ def update_pin(pin_id: str, request: PinRequest) -> dict[str, bool]:
                         "services": request.services or [],
                         "metricsByService": request.metricsByService or {},
                         "tracesByService": request.tracesByService or {},
+                        "endpointMetricsByService": request.endpointMetricsByService or {},
                     },
                     ensure_ascii=True,
                 ),

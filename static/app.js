@@ -119,8 +119,9 @@ let analysisConversation = [];
 let analysisSessionId = localStorage.getItem(ANALYSIS_SESSION_KEY) || null;
 let pinnedResults = [];
 let projects = [];
-/** When set, trace loads prefer saved journey_json traces instead of live NRQL. */
+/** When set, trace and endpoint metrics load from saved pin data instead of live APIs. */
 let activePinnedTracesPinId = null;
+let endpointMetricsByServiceCache = {};
 
 const RANGE_LABELS = {
     "now-5m": "Last 5 minutes",
@@ -1513,15 +1514,21 @@ async function selectEndpoint(name) {
 
     if (activePinnedTracesPinId) {
         const saved = resolveEndpointMetrics(serviceSelect.value, name);
+        selectedEndpoint = name;
+        renderEndpointList(metricsCache.endpoints || []);
         if (saved) {
-            selectedEndpoint = name;
-            renderEndpointList(metricsCache.endpoints || []);
             renderLatency(saved.response_time_ms || {}, name);
             renderThroughput(saved.throughput || {}, name);
             pulseServicePanel();
             loadTraces(name);
             return;
         }
+        renderLatency({}, name);
+        renderThroughput({}, name);
+        pulseServicePanel();
+        loadTraces(name);
+        analysisBox.textContent = "No saved throughput for this endpoint. Use Update Test to refresh saved data.";
+        return;
     }
 
     const requestId = ++endpointRequestId;
@@ -1750,13 +1757,87 @@ function getServiceMetricsBundle(service) {
     return null;
 }
 
+function matchEndpointMetricsKey(bucket, endpointName) {
+    if (!bucket || typeof bucket !== "object") {
+        return null;
+    }
+    const key = endpointName || "";
+    if (bucket[key]) {
+        return key;
+    }
+    if (!endpointName) {
+        return bucket[""] ? "" : null;
+    }
+    const exact = Object.keys(bucket).find((candidate) => candidate === endpointName);
+    if (exact) {
+        return exact;
+    }
+    return Object.keys(bucket).find(
+        (candidate) => candidate && endpointLabel(candidate) === endpointLabel(endpointName),
+    ) || null;
+}
+
 function resolveEndpointMetrics(service, endpointName) {
+    const bucket = endpointMetricsByServiceCache[service];
+    const cacheKey = matchEndpointMetricsKey(bucket, endpointName);
+    if (cacheKey && bucket[cacheKey]) {
+        return bucket[cacheKey];
+    }
     const metrics = normalizeServiceMetricsBundle(getServiceMetricsBundle(service));
     if (!metrics) {
         return null;
     }
-    const key = endpointName || "";
-    return metrics.byEndpoint[key] || null;
+    const metricsKey = matchEndpointMetricsKey(metrics.byEndpoint, endpointName);
+    return metricsKey ? metrics.byEndpoint[metricsKey] : null;
+}
+
+function hydrateEndpointMetricsFromPin(item) {
+    endpointMetricsByServiceCache = {};
+    const fromJourney = item.endpointMetricsByService;
+    if (fromJourney && typeof fromJourney === "object") {
+        endpointMetricsByServiceCache = { ...fromJourney };
+    }
+    const metricsByService = item.metricsByService && typeof item.metricsByService === "object"
+        ? item.metricsByService
+        : {};
+    for (const [service, metrics] of Object.entries(metricsByService)) {
+        const normalized = normalizeServiceMetricsBundle(metrics);
+        const byEndpoint = normalized?.byEndpoint;
+        if (!byEndpoint || !Object.keys(byEndpoint).length) {
+            continue;
+        }
+        if (!endpointMetricsByServiceCache[service]) {
+            endpointMetricsByServiceCache[service] = { ...byEndpoint };
+        }
+    }
+    if (!Object.keys(endpointMetricsByServiceCache).length && item.metrics?.byEndpoint) {
+        const service = item.service;
+        if (service) {
+            endpointMetricsByServiceCache[service] = { ...item.metrics.byEndpoint };
+        }
+    }
+}
+
+function applySavedPinCaches(item) {
+    hydrateEndpointMetricsFromPin(item);
+    const services = Array.isArray(item.services) && item.services.length
+        ? item.services
+        : [item.service];
+    const metricsByService = item.metricsByService && typeof item.metricsByService === "object"
+        ? item.metricsByService
+        : {};
+    multiMetricsCache = services.map((name) => {
+        const raw = metricsByService[name] || (name === item.service ? item.metrics : null);
+        const metrics = normalizeServiceMetricsBundle(raw);
+        if (!metrics) {
+            return null;
+        }
+        const bucket = endpointMetricsByServiceCache[name];
+        if (bucket && Object.keys(bucket).length) {
+            metrics.byEndpoint = { ...(metrics.byEndpoint || {}), ...bucket };
+        }
+        return { service: name, metrics };
+    }).filter(Boolean);
 }
 
 async function fetchEndpointMetricsSlice(service, startTime, endTime, endpoint) {
@@ -2115,6 +2196,7 @@ async function fetchMetrics() {
             throw new Error("Select at least one service.");
         }
         activePinnedTracesPinId = null;
+        endpointMetricsByServiceCache = {};
         if (services.length === 1) {
             const data = await fetchMetricsPayload(services[0], range.start_time, range.end_time);
             tracesByServiceCache = {};
@@ -2209,15 +2291,18 @@ async function buildPinPayload() {
         ? multiMetricsCache
         : [{ service: serviceSelect.value, metrics: metricsCache }];
     const metricsByService = {};
+    const endpointMetricsByService = {};
     for (const row of metricRows) {
         if (!row.service || !row.metrics) {
             continue;
         }
-        metricsByService[row.service] = await collectServiceMetricsForPin(
+        const enriched = await collectServiceMetricsForPin(
             row.service,
             metricRange,
             row.metrics,
         );
+        metricsByService[row.service] = enriched;
+        endpointMetricsByService[row.service] = enriched.byEndpoint || {};
     }
     const primaryMetrics = metricsByService[serviceSelect.value] || metricsCache;
     if (primaryMetrics) {
@@ -2227,6 +2312,7 @@ async function buildPinPayload() {
         service,
         metrics,
     }));
+    endpointMetricsByServiceCache = { ...endpointMetricsByService };
     return {
         projectId: projectSelect.value,
         testName: testNameInput.value.trim(),
@@ -2246,6 +2332,7 @@ async function buildPinPayload() {
         traces,
         services: selectedServices,
         metricsByService,
+        endpointMetricsByService,
         tracesByService: traces.byService || tracesByServiceCache || {},
     };
 }
@@ -2279,6 +2366,7 @@ async function pinCurrentResult() {
             pinnedSelect.value = data.id;
             activePinnedTracesPinId = data.id;
         }
+        applySavedPinCaches(item);
         analysisBox.textContent = "Test saved with traces and breakdowns.";
     } catch (error) {
         analysisBox.textContent = `Save test error: ${error.message}`;
@@ -2313,6 +2401,8 @@ async function saveToCurrentPin() {
         }
         await loadProjects(projectSelect.value);
         pinnedSelect.value = pinId;
+        activePinnedTracesPinId = pinId;
+        applySavedPinCaches(payload);
         analysisBox.textContent = "Test, traces, and conversation updated.";
     } catch (error) {
         analysisBox.textContent = `Update test error: ${error.message}`;
@@ -2368,11 +2458,7 @@ async function loadPinnedResult() {
         }
     }
     activePinnedTracesPinId = selectedId;
-    multiMetricsCache = services.map((name) => {
-        const raw = metricsByService[name] || (name === item.service ? item.metrics : null);
-        const metrics = normalizeServiceMetricsBundle(raw);
-        return metrics ? { service: name, metrics } : null;
-    }).filter(Boolean);
+    applySavedPinCaches(item);
     const focused = multiMetricsCache.find((row) => row.service === item.service) || multiMetricsCache[0];
     if (focused) {
         showServiceMetrics(focused.metrics, tracesByServiceCache[focused.service] || item.traces);
