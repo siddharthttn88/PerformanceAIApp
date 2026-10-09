@@ -20,7 +20,9 @@ const pinBtn = document.getElementById("pinBtn");
 const analyzeBtn = document.getElementById("analyzeBtn");
 const analysisModelSelect = document.getElementById("analysisModelSelect");
 const analysisBox = document.getElementById("analysisBox");
+const analysisIncludeMetricsEl = document.getElementById("analysisIncludeMetrics");
 const analysisIncludeTracesEl = document.getElementById("analysisIncludeTraces");
+const analysisIncludeHistoryEl = document.getElementById("analysisIncludeHistory");
 const askInput = document.getElementById("askInput");
 const askBtn = document.getElementById("askBtn");
 const savePinBtn = document.getElementById("savePinBtn");
@@ -95,6 +97,12 @@ const traceBreakdownEl = document.getElementById("traceBreakdown");
 const traceBreakdownIdEl = document.getElementById("traceBreakdownId");
 const traceBreakdownStatusEl = document.getElementById("traceBreakdownStatus");
 const traceBreakdownBodyEl = document.getElementById("traceBreakdownBody");
+const appAlertEl = document.getElementById("appAlert");
+const appAlertTitleEl = document.getElementById("appAlertTitle");
+const appAlertMessageEl = document.getElementById("appAlertMessage");
+const appAlertOkEl = document.getElementById("appAlertOk");
+const appAlertBackdropEl = document.getElementById("appAlertBackdrop");
+const ANALYSIS_IDLE_MESSAGE = "Fetch metrics to start a performance chat.";
 const hpaNameEl = document.getElementById("hpaName");
 
 let metricsCache = null;
@@ -482,7 +490,7 @@ async function deleteProject() {
         return;
     }
     if (projects.length <= 1) {
-        analysisBox.textContent = "At least one project must remain.";
+        showAppError("At least one project must remain.");
         return;
     }
     const confirmed = window.confirm(
@@ -504,7 +512,7 @@ async function deleteProject() {
         await loadProjects();
         analysisBox.textContent = `Project "${project.name}" deleted.`;
     } catch (error) {
-        analysisBox.textContent = `Delete project error: ${error.message}`;
+        showAppError(error.message);
         deleteProjectBtn.disabled = projects.length <= 1;
     }
 }
@@ -512,7 +520,7 @@ async function deleteProject() {
 async function createProject() {
     const name = newProjectNameInput.value.trim();
     if (!name) {
-        analysisBox.textContent = "Enter a project name first.";
+        showAppError("Enter a project name first.");
         newProjectNameInput.focus();
         return;
     }
@@ -532,7 +540,7 @@ async function createProject() {
         await loadProjects(data.id);
         analysisBox.textContent = `Project "${data.name}" created.`;
     } catch (error) {
-        analysisBox.textContent = `Project error: ${error.message}`;
+        showAppError(error.message);
     } finally {
         createProjectBtn.disabled = false;
     }
@@ -801,7 +809,7 @@ async function loadServices() {
         serviceSelect.innerHTML = "<option>Failed to load services</option>";
         compareServiceSelect.innerHTML = serviceSelect.innerHTML;
         serviceMenuBtn.textContent = "Failed to load services";
-        analysisBox.textContent = `Service load error: ${error.message}`;
+        showAppError(error.message);
     }
 }
 
@@ -1237,7 +1245,43 @@ function closeTraceBreakdownModal() {
         return;
     }
     traceBreakdownEl.classList.add("hidden");
-    document.body.classList.remove("modal-open");
+    if (appAlertEl && appAlertEl.classList.contains("hidden")) {
+        document.body.classList.remove("modal-open");
+    }
+}
+
+function normalizeAlertMessage(message) {
+    return String(message || "Something went wrong.")
+        .replace(/^Error:\s*/i, "")
+        .trim();
+}
+
+function showAppAlert(message, title = "Error") {
+    if (!appAlertEl || !appAlertMessageEl || !appAlertTitleEl) {
+        window.alert(normalizeAlertMessage(message));
+        return;
+    }
+    appAlertTitleEl.textContent = title;
+    appAlertMessageEl.textContent = normalizeAlertMessage(message);
+    appAlertEl.classList.remove("hidden");
+    document.body.classList.add("modal-open");
+    if (appAlertOkEl) {
+        appAlertOkEl.focus();
+    }
+}
+
+function showAppError(message) {
+    showAppAlert(message, "Error");
+}
+
+function closeAppAlert() {
+    if (!appAlertEl) {
+        return;
+    }
+    appAlertEl.classList.add("hidden");
+    if (traceBreakdownEl && traceBreakdownEl.classList.contains("hidden")) {
+        document.body.classList.remove("modal-open");
+    }
 }
 
 function resetTraceBreakdown() {
@@ -1527,7 +1571,7 @@ async function selectEndpoint(name) {
         renderThroughput({}, name);
         pulseServicePanel();
         loadTraces(name);
-        analysisBox.textContent = "No saved throughput for this endpoint. Use Update Test to refresh saved data.";
+        showAppAlert("No saved throughput for this endpoint. Use Update Test to refresh saved data.", "Notice");
         return;
     }
 
@@ -1560,10 +1604,20 @@ async function selectEndpoint(name) {
         renderEndpointList(metricsCache.endpoints || []);
         renderLatency(metricsCache.response_time_ms || {}, "");
         renderThroughput(metricsCache.throughput || {}, "");
-        analysisBox.textContent = `Endpoint metrics error: ${error.message}`;
+        showAppError(error.message);
     } finally {
         if (requestId === endpointRequestId) {
             setEndpointButtonsDisabled(false);
+        }
+    }
+}
+
+function syncAnalysisAttachOptions() {
+    const metricsOn = Boolean(analysisIncludeMetricsEl && analysisIncludeMetricsEl.checked);
+    if (analysisIncludeTracesEl) {
+        analysisIncludeTracesEl.disabled = !metricsOn;
+        if (!metricsOn) {
+            analysisIncludeTracesEl.checked = false;
         }
     }
 }
@@ -1574,29 +1628,40 @@ async function analyze(question = "") {
     }
 
     const selectedModel = analysisModelSelect ? analysisModelSelect.value.trim() : "";
-    const history = analysisConversation
-        .slice(-12)
-        .map((entry) => ({
-            role: String(entry.role || ""),
-            content: String(entry.content || ""),
-        }))
-        .filter((entry) => (entry.role === "user" || entry.role === "assistant") && entry.content);
-    if (question && history.length) {
-        const last = history[history.length - 1];
-        if (last.role === "user" && last.content === question) {
-            history.pop();
+    const includeHistory = Boolean(analysisIncludeHistoryEl && analysisIncludeHistoryEl.checked);
+    let history = [];
+    if (includeHistory) {
+        history = analysisConversation
+            .slice(-12)
+            .map((entry) => ({
+                role: String(entry.role || ""),
+                content: String(entry.content || ""),
+            }))
+            .filter((entry) => (entry.role === "user" || entry.role === "assistant") && entry.content);
+        if (question && history.length) {
+            const last = history[history.length - 1];
+            if (last.role === "user" && last.content === question) {
+                history.pop();
+            }
         }
     }
-    const includeTraces = Boolean(analysisIncludeTracesEl && analysisIncludeTracesEl.checked);
+    const hasQuestion = Boolean(String(question || "").trim());
+    const includeMetrics = hasQuestion
+        ? Boolean(analysisIncludeMetricsEl && analysisIncludeMetricsEl.checked)
+        : true;
+    const includeTraces = includeMetrics
+        && Boolean(analysisIncludeTracesEl && analysisIncludeTracesEl.checked);
     const traces = includeTraces ? await collectTraceContext() : null;
     const payload = {
         service: serviceSelect.value,
-        metrics: metricsCache,
+        metrics: includeMetrics ? metricsCache : null,
         question: question || null,
         model: selectedModel || null,
         history,
         session: analysisSessionId || "new",
         includeTraces,
+        includeMetrics,
+        includeHistory,
         traces,
     };
 
@@ -2232,7 +2297,13 @@ async function fetchMetrics() {
         analyzeBtn.disabled = false;
         pinBtn.disabled = false;
     } catch (error) {
-        analysisBox.textContent = `Error: ${error.message}`;
+        if (
+            analysisBox.textContent === "Fetching metrics..."
+            || analysisBox.textContent.startsWith("Fetching metrics for ")
+        ) {
+            analysisBox.textContent = ANALYSIS_IDLE_MESSAGE;
+        }
+        showAppError(error.message);
     } finally {
         fetchBtn.disabled = false;
         fetchBtn.textContent = "Fetch Metrics";
@@ -2241,7 +2312,7 @@ async function fetchMetrics() {
 
 async function runAiAnalysis() {
     if (!metricsCache) {
-        analysisBox.textContent = "Fetch metrics first, then run AI analysis.";
+        showAppError("Fetch metrics first, then run AI analysis.");
         return;
     }
 
@@ -2261,7 +2332,7 @@ async function runAiAnalysis() {
             analysisBox.textContent = "No analysis returned.";
         }
     } catch (error) {
-        analysisBox.textContent = `Analysis error: ${error.message}`;
+        showAppError(error.message);
     } finally {
         analyzeBtn.disabled = false;
     }
@@ -2339,11 +2410,11 @@ async function buildPinPayload() {
 
 async function pinCurrentResult() {
     if (!metricsCache) {
-        analysisBox.textContent = "Fetch metrics first, then save the test.";
+        showAppError("Fetch metrics first, then save the test.");
         return;
     }
     if (!projectSelect.value || !testNameInput.value.trim()) {
-        analysisBox.textContent = "Select a project and enter a test name.";
+        showAppError("Select a project and enter a test name.");
         return;
     }
 
@@ -2369,7 +2440,7 @@ async function pinCurrentResult() {
         applySavedPinCaches(item);
         analysisBox.textContent = "Test saved with traces and breakdowns.";
     } catch (error) {
-        analysisBox.textContent = `Save test error: ${error.message}`;
+        showAppError(error.message);
     } finally {
         pinBtn.disabled = false;
     }
@@ -2377,12 +2448,12 @@ async function pinCurrentResult() {
 
 async function saveToCurrentPin() {
     if (!metricsCache) {
-        analysisBox.textContent = "Fetch or load a test first.";
+        showAppError("Fetch or load a test first.");
         return;
     }
     const pinId = pinnedSelect.value;
     if (!pinId) {
-        analysisBox.textContent = "Select a saved test first.";
+        showAppError("Select a saved test first.");
         return;
     }
 
@@ -2405,7 +2476,7 @@ async function saveToCurrentPin() {
         applySavedPinCaches(payload);
         analysisBox.textContent = "Test, traces, and conversation updated.";
     } catch (error) {
-        analysisBox.textContent = `Update test error: ${error.message}`;
+        showAppError(error.message);
     } finally {
         savePinBtn.disabled = false;
     }
@@ -2424,7 +2495,7 @@ async function loadPinnedResult() {
         }
         item = data;
     } catch (error) {
-        analysisBox.textContent = `Load pin error: ${error.message}`;
+        showAppError(error.message);
         return;
     }
 
@@ -2494,7 +2565,7 @@ async function deletePinnedResult() {
         await loadProjects(projectSelect.value);
         analysisBox.textContent = "Saved test deleted.";
     } catch (error) {
-        analysisBox.textContent = `Delete test error: ${error.message}`;
+        showAppError(error.message);
     }
 }
 
@@ -2504,7 +2575,7 @@ async function askQuestion() {
         return;
     }
     if (!metricsCache) {
-        analysisBox.textContent = "Fetch metrics first before asking questions.";
+        showAppError("Fetch metrics first before asking questions.");
         return;
     }
 
@@ -2535,7 +2606,7 @@ async function askQuestion() {
             content: `I hit an error: ${error.message}`,
         });
         renderConversation();
-        analysisBox.textContent = `Ask error: ${error.message}`;
+        showAppError(error.message);
     } finally {
         askBtn.disabled = false;
     }
@@ -3043,7 +3114,7 @@ endTimeInput.addEventListener("change", updateTimeRangeControls);
 projectSelect.addEventListener("change", () => {
     renderProjectMenu();
     refreshPinnedOptions().catch((error) => {
-        analysisBox.textContent = `Saved tests error: ${error.message}`;
+        showAppError(error.message);
     });
 });
 projectMenuBtn.addEventListener("click", (event) => {
@@ -3083,6 +3154,10 @@ if (tracesBreakdownFilterEl) {
         }
     });
 }
+if (analysisIncludeMetricsEl) {
+    analysisIncludeMetricsEl.addEventListener("change", syncAnalysisAttachOptions);
+}
+syncAnalysisAttachOptions();
 pinBtn.addEventListener("click", pinCurrentResult);
 analyzeBtn.addEventListener("click", runAiAnalysis);
 const traceBreakdownCloseEl = document.getElementById("traceBreakdownClose");
@@ -3094,10 +3169,23 @@ if (traceBreakdownBackdropEl) {
     traceBreakdownBackdropEl.addEventListener("click", closeTraceBreakdownModal);
 }
 document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && traceBreakdownEl && !traceBreakdownEl.classList.contains("hidden")) {
+    if (event.key !== "Escape") {
+        return;
+    }
+    if (appAlertEl && !appAlertEl.classList.contains("hidden")) {
+        closeAppAlert();
+        return;
+    }
+    if (traceBreakdownEl && !traceBreakdownEl.classList.contains("hidden")) {
         closeTraceBreakdownModal();
     }
 });
+if (appAlertOkEl) {
+    appAlertOkEl.addEventListener("click", closeAppAlert);
+}
+if (appAlertBackdropEl) {
+    appAlertBackdropEl.addEventListener("click", closeAppAlert);
+}
 askBtn.addEventListener("click", askQuestion);
 savePinBtn.addEventListener("click", saveToCurrentPin);
 askInput.addEventListener("keydown", (event) => {
@@ -3134,7 +3222,7 @@ askInput.addEventListener("input", () => {
     askInput.style.height = `${Math.min(askInput.scrollHeight, 120)}px`;
 });
 loadProjects().catch((error) => {
-    analysisBox.textContent = `Project load error: ${error.message}`;
+    showAppError(error.message);
 });
 loadServices();
 renderConversation();

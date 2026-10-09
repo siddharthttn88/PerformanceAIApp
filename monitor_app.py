@@ -132,13 +132,15 @@ class TraceBreakdownRequest(BaseModel):
 
 class AnalyzeRequest(BaseModel):
     service: str
-    metrics: dict[str, Any]
+    metrics: dict[str, Any] | None = None
     question: str | None = None
     model: str | None = None
     history: list[dict[str, str]] | None = None
     session: str | None = None
     traces: dict[str, Any] | None = None
     includeTraces: bool = False
+    includeMetrics: bool = True
+    includeHistory: bool = False
 
 
 class ProjectRequest(BaseModel):
@@ -2234,18 +2236,26 @@ def delete_pin(pin_id: str) -> dict[str, bool]:
 def analyze_metrics(request: AnalyzeRequest) -> dict[str, Any]:
     question = request.question.strip() if request.question else ""
     has_question = bool(question)
-    question_line = (
-        f'User question: "{question}", you can use MCP tools (newrelic & grafana-infra) to server results'
-        if has_question
-        else "User question: none (provide proactive analysis)"
-    )
+    include_metrics = bool(request.includeMetrics and request.metrics)
+    if has_question and include_metrics:
+        question_line = (
+            f'User question: "{question}", you can use MCP tools (newrelic & grafana-infra) to serve results'
+        )
+    elif has_question:
+        question_line = (
+            f'User question: "{question}".'
+            "Do not restate full metric dumps unless the user asks about performance data."
+        )
+    else:
+        question_line = "User question: none (provide proactive analysis)"
     history_lines: list[str] = []
-    for entry in request.history or []:
-        role = str(entry.get("role", "")).strip().lower()
-        content = str(entry.get("content", "")).strip()
-        if role in {"user", "assistant"} and content:
-            history_lines.append(f"{role}: {content}")
-    conversation_context = "\n".join(history_lines) if history_lines else "none"
+    if request.includeHistory:
+        for entry in request.history or []:
+            role = str(entry.get("role", "")).strip().lower()
+            content = str(entry.get("content", "")).strip()
+            if role in {"user", "assistant"} and content:
+                history_lines.append(f"{role}: {content}")
+    conversation_context = "\n".join(history_lines) if history_lines else "none (use agent session)"
 
     answer_style_rules = (
         """
@@ -2275,8 +2285,18 @@ Rules:
     if request.includeTraces and request.traces:
         traces_block = json.dumps(request.traces, ensure_ascii=True)
 
+    metrics_block = "none"
+    if include_metrics:
+        metrics_block = json.dumps(request.metrics, ensure_ascii=True)
+
+    task_intro = (
+        f'Analyze the metrics JSON below for service "{request.service}".'
+        if include_metrics
+        else f'Continue the performance chat for service "{request.service}".'
+    )
+
     prompt = f"""
-Analyze the metrics JSON below for service "{request.service}".
+{task_intro}
 {question_line}
 Conversation context:
 {conversation_context}
@@ -2291,7 +2311,7 @@ Return ONLY valid JSON with this exact shape:
 The "analysis" value MUST include real newline characters between headings and bullets.
 
 Metrics JSON:
-{json.dumps(request.metrics, ensure_ascii=True)}
+{metrics_block}
 
 Transaction traces with span breakdowns:
 {traces_block}

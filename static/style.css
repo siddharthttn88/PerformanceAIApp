@@ -817,6 +817,68 @@ body.modal-open {
     overflow: hidden;
 }
 
+.app-alert {
+    position: fixed;
+    inset: 0;
+    z-index: 90;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+}
+
+.app-alert.hidden {
+    display: none !important;
+}
+
+.app-alert-backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(15, 23, 42, 0.45);
+}
+
+.app-alert-panel {
+    position: relative;
+    z-index: 1;
+    width: min(420px, 100%);
+    padding: 22px 24px 20px;
+    border-radius: 16px;
+    border: 1px solid #e2e8f0;
+    background: #fff;
+    box-shadow: 0 24px 48px rgba(15, 23, 42, 0.2);
+}
+
+.app-alert-panel h3 {
+    margin: 0 0 10px;
+    font-size: 18px;
+    font-weight: 700;
+    color: #0f172a;
+}
+
+.app-alert-panel p {
+    margin: 0 0 20px;
+    font-size: 14px;
+    line-height: 1.55;
+    color: #475569;
+}
+
+.app-alert-ok {
+    width: 100%;
+    min-height: 40px;
+    border: 0;
+    border-radius: 10px;
+    background: #2563eb;
+    color: #fff;
+    font-size: 14px;
+    font-weight: 600;
+    box-shadow: none;
+    cursor: pointer;
+}
+
+.app-alert-ok:hover {
+    background: #1d4ed8;
+}
+
 .trace-modal {
     position: fixed;
     inset: 0;

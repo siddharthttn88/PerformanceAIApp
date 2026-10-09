@@ -9,7 +9,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/style.css?v=31">
+    <link rel="stylesheet" href="/static/style.css?v=32">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
@@ -249,8 +249,16 @@
                             </div>
                             <div class="analysis-model-row">
                                 <label class="traces-filter analysis-trace-opt">
+                                    <input type="checkbox" id="analysisIncludeMetrics">
+                                    <span>Include metrics</span>
+                                </label>
+                                <label class="traces-filter analysis-trace-opt">
                                     <input type="checkbox" id="analysisIncludeTraces">
                                     <span>Include traces + breakdowns</span>
+                                </label>
+                                <label class="traces-filter analysis-trace-opt">
+                                    <input type="checkbox" id="analysisIncludeHistory">
+                                    <span>Include chat history</span>
                                 </label>
                                 <select id="analysisModelSelect" aria-label="Select AI model">
                                     <option value="">Auto</option>
@@ -489,6 +497,15 @@
         </div>
     </div>
 
-    <script src="/static/app.js?v=37"></script>
+    <div id="appAlert" class="app-alert hidden" role="alertdialog" aria-modal="true" aria-labelledby="appAlertTitle" aria-describedby="appAlertMessage">
+        <div class="app-alert-backdrop" id="appAlertBackdrop"></div>
+        <div class="app-alert-panel">
+            <h3 id="appAlertTitle">Error</h3>
+            <p id="appAlertMessage"></p>
+            <button type="button" id="appAlertOk" class="app-alert-ok">OK</button>
+        </div>
+    </div>
+
+    <script src="/static/app.js?v=41"></script>
 </body>
 </html>
