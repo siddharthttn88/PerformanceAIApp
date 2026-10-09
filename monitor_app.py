@@ -22,6 +22,8 @@ from mcp import ClientSessionGroup, StdioServerParameters
 from mcp.client.session import ClientSession
 from pydantic import BaseModel, Field
 
+from performance_ai_system_prompt import PERFORMANCE_AI_SYSTEM_PROMPT
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 ENV_FILE_PATH = PROJECT_ROOT / ".env"
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -1022,10 +1024,27 @@ def _extract_json(text: str) -> dict[str, Any]:
         )
 
 
+def _is_new_agent_session(session_id: str | None) -> bool:
+    return not (session_id or "").strip() or (session_id or "").strip().lower() == "new"
+
+
+def _compose_agent_prompt(prompt: str, system_prompt: str | None = None) -> str:
+    if not system_prompt or not system_prompt.strip():
+        return prompt
+    return (
+        f"{system_prompt.strip()}\n\n"
+        "==================================================\n"
+        "CURRENT TASK\n"
+        "==================================================\n\n"
+        f"{prompt}"
+    )
+
+
 def run_cursor_agent(
     prompt: str,
     model: str | None = None,
     session_id: str | None = None,
+    system_prompt: str | None = None,
 ) -> dict[str, Any]:
     if not os.path.exists(CURSOR_AGENT):
         raise HTTPException(
@@ -1034,6 +1053,7 @@ def run_cursor_agent(
         )
 
     selected_model = model or CURSOR_MODEL
+    agent_prompt = _compose_agent_prompt(prompt, system_prompt)
 
     command = [
         "powershell.exe",
@@ -1043,7 +1063,7 @@ def run_cursor_agent(
         "-File",
         CURSOR_AGENT,
         "-p",
-        prompt,
+        agent_prompt,
         "--model",
         selected_model,
         "--output-format",
@@ -2317,11 +2337,22 @@ Transaction traces with span breakdowns:
 {traces_block}
 """
 
-    result = run_cursor_agent(
-        prompt=prompt,
-        model=request.model,
-        session_id=request.session,
-    )
+    # system_prompt = PERFORMANCE_AI_SYSTEM_PROMPT if _is_new_agent_session(request.session) else None
+
+    if _is_new_agent_session(request.session):
+        result = run_cursor_agent(
+            prompt=prompt,
+            model=request.model,
+            session_id=request.session,
+            system_prompt=PERFORMANCE_AI_SYSTEM_PROMPT,
+        )
+
+    else:
+        result = run_cursor_agent(
+            prompt=prompt,
+            model=request.model,
+            session_id=request.session,
+        )
     raw = result.get("result", "")
     if not isinstance(raw, str) or not raw.strip():
         raise HTTPException(status_code=500, detail="Empty response from Cursor Agent.")
